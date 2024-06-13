@@ -14,11 +14,8 @@ defmodule Hammer.Utils do
     DateTime.to_unix(DateTime.utc_now(), :millisecond)
   end
 
-  # Returns tuple of {timestamp, key}, where key is {bucket_number, id}
-  def stamp_key(id, scale_ms) do
-    stamp = timestamp()
-    key = {scale_ms, id}
-    {stamp, key}
+  def build_key(id, scale_ms) do
+    {scale_ms, id}
   end
 
   def get_backend_module(:single) do

@@ -1,6 +1,8 @@
 defmodule HammerTest do
   use ExUnit.Case, async: false
 
+  alias Hammer.Utils
+
   setup _context do
     pool = Hammer.Utils.pool_name()
 
@@ -45,12 +47,12 @@ defmodule HammerTest do
     check = Hammer.make_rate_checker("some-prefix:", 10_000, 2)
     assert {:allow, 1} = check.("aaa")
     assert {:allow, 2} = check.("aaa")
-    assert {:deny, 2} = check.("aaa")
-    assert {:deny, 2} = check.("aaa")
+    assert {:deny, 3, _ms, _created} = check.("aaa")
+    assert {:deny, 4, _ms, _created} = check.("aaa")
     assert {:allow, 1} = check.("bbb")
     assert {:allow, 2} = check.("bbb")
-    assert {:deny, 2} = check.("bbb")
-    assert {:deny, 2} = check.("bbb")
+    assert {:deny, 3, _ms, _created} = check.("bbb")
+    assert {:deny, 4, _ms, _created} = check.("bbb")
   end
 
   test "returns {:ok, 1} tuple on first access", %{bucket: bucket} do
@@ -67,8 +69,8 @@ defmodule HammerTest do
   test "returns expected tuples on mix of in-limit and out-of-limit checks", %{bucket: bucket} do
     assert {:allow, 1} = Hammer.check_rate(bucket, 10_000, 2)
     assert {:allow, 2} = Hammer.check_rate(bucket, 10_000, 2)
-    assert {:deny, 2} = Hammer.check_rate(bucket, 10_000, 2)
-    assert {:deny, 2} = Hammer.check_rate(bucket, 10_000, 2)
+    assert {:deny, 3, _ms, _created} = Hammer.check_rate(bucket, 10_000, 2)
+    assert {:deny, 4, _ms, _created} = Hammer.check_rate(bucket, 10_000, 2)
   end
 
   test "returns expected tuples on 1000ms bucket check with a sleep in the middle", %{
@@ -76,11 +78,11 @@ defmodule HammerTest do
   } do
     assert {:allow, 1} = Hammer.check_rate(bucket, 1000, 2)
     assert {:allow, 2} = Hammer.check_rate(bucket, 1000, 2)
-    assert {:deny, 2} = Hammer.check_rate(bucket, 1000, 2)
+    assert {:deny, 3, _ms, _created} = Hammer.check_rate(bucket, 1000, 2)
     :timer.sleep(1001)
     assert {:allow, 1} = Hammer.check_rate(bucket, 1000, 2)
     assert {:allow, 2} = Hammer.check_rate(bucket, 1000, 2)
-    assert {:deny, 2} = Hammer.check_rate(bucket, 1000, 2)
+    assert {:deny, 3, _ms, _created} = Hammer.check_rate(bucket, 1000, 2)
   end
 
   test "returns expected tuples on inspect_bucket" do
@@ -90,26 +92,30 @@ defmodule HammerTest do
     assert {:allow, 2} = Hammer.check_rate("inspect_bucket11", 10_000, 2)
     assert {:allow, 1} = Hammer.check_rate("inspect_bucket22", 10_000, 2)
     assert {:ok, {2, 0, _, _, _}} = Hammer.inspect_bucket("inspect_bucket11", 10_000, 2)
-    assert {:deny, 2} = Hammer.check_rate("inspect_bucket11", 10_000, 2)
+    assert {:deny, 3, ms_to_next_bucket1, created} = Hammer.check_rate("inspect_bucket11", 10_000, 2)
+
+    assert ms_to_next_bucket1 <= 10_000
+
+    assert created <= Utils.timestamp()
 
     :timer.sleep(1)
 
-    assert {:ok, {3, 0, ms_to_next_bucket, _, _}} =
+    assert {:ok, {3, 0, ms_to_next_bucket2, _, _}} =
              Hammer.inspect_bucket("inspect_bucket11", 10_000, 2)
 
-    assert ms_to_next_bucket < 10_000
+    assert ms_to_next_bucket2 < 10_000
   end
 
   test "returns expected tuples on delete_buckets" do
     assert {:allow, 1} = Hammer.check_rate("my-bucket1", 1000, 2)
     assert {:allow, 2} = Hammer.check_rate("my-bucket1", 1000, 2)
-    assert {:deny, 2} = Hammer.check_rate("my-bucket1", 1000, 2)
+    assert {:deny, 3, _ms, _created} = Hammer.check_rate("my-bucket1", 1000, 2)
     assert {:allow, 1} = Hammer.check_rate("my-bucket2", 1000, 2)
     assert {:allow, 2} = Hammer.check_rate("my-bucket2", 1000, 2)
-    assert {:deny, 2} = Hammer.check_rate("my-bucket2", 1000, 2)
+    assert {:deny, 3, _ms, _created} = Hammer.check_rate("my-bucket2", 1000, 2)
     assert {:ok, 1} = Hammer.delete_buckets("my-bucket1")
     assert {:allow, 1} = Hammer.check_rate("my-bucket1", 1000, 2)
-    assert {:deny, 2} = Hammer.check_rate("my-bucket2", 1000, 2)
+    assert {:deny, 4, _ms, _created} = Hammer.check_rate("my-bucket2", 1000, 2)
 
     assert {:ok, 0} = Hammer.delete_buckets("unknown-bucket")
   end
@@ -117,7 +123,11 @@ defmodule HammerTest do
   test "count_hit_inc" do
     assert {:allow, 4} = Hammer.check_rate_inc("cost-bucket1", 1000, 10, 4)
     assert {:allow, 9} = Hammer.check_rate_inc("cost-bucket1", 1000, 10, 5)
-    assert {:deny, 10} = Hammer.check_rate_inc("cost-bucket1", 1000, 10, 3)
+    assert {:deny, 12, ms_to_next_bucket, created} = Hammer.check_rate_inc("cost-bucket1", 1000, 10, 3)
+
+    assert ms_to_next_bucket <= 1000
+
+    assert created <= Utils.timestamp()
   end
 
   test "mixing count_hit with count_hit_inc" do
@@ -126,7 +136,7 @@ defmodule HammerTest do
     assert {:allow, 5} = Hammer.check_rate("cost-bucket2", 1000, 10)
     assert {:allow, 9} = Hammer.check_rate_inc("cost-bucket2", 1000, 10, 4)
     assert {:allow, 10} = Hammer.check_rate("cost-bucket2", 1000, 10)
-    assert {:deny, 10} = Hammer.check_rate_inc("cost-bucket2", 1000, 10, 2)
+    assert {:deny, 12, _ms_to_next, _created} = Hammer.check_rate_inc("cost-bucket2", 1000, 10, 2)
   end
 
   test "ms_to_next_bucket should be equal to scale_ms on first check_rate", %{bucket: bucket} do

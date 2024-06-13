@@ -10,20 +10,18 @@ defmodule Hammer.Backend do
   @callback count_hit(
               pid :: pid(),
               key :: bucket_key,
-              scale_ms :: integer,
-              now :: integer
+              scale_ms :: integer
             ) ::
-              {:ok, count :: integer}
+              {:ok, count :: integer, created :: integer}
               | {:error, reason :: any}
 
   @callback count_hit(
               pid :: pid(),
               key :: bucket_key,
               scale_ms :: integer,
-              now :: integer,
               increment :: integer
             ) ::
-              {:ok, count :: integer}
+              {:ok, count :: integer, created :: integer}
               | {:error, reason :: any}
 
   @callback get_bucket(

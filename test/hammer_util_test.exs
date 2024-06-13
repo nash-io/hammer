@@ -5,10 +5,9 @@ defmodule UtilsTest do
     assert is_integer(Hammer.Utils.timestamp())
   end
 
-  test "stamp_key" do
+  test "build_key" do
     id = "test_one_two"
-    {stamp, key} = Hammer.Utils.stamp_key(id, 60_000)
-    assert is_integer(stamp)
+    key = Hammer.Utils.build_key(id, 60_000)
     assert is_tuple(key)
     {bucket_number, b_id} = key
     assert is_integer(bucket_number)

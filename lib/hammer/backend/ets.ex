@@ -69,13 +69,12 @@ defmodule Hammer.Backend.ETS do
   @spec count_hit(
           pid :: pid(),
           key :: bucket_key,
-          scale_ms :: integer,
-          now :: integer
+          scale_ms :: integer
         ) ::
-          {:ok, count :: integer}
+          {:ok, count :: integer, created :: integer}
           | {:error, reason :: any}
-  def count_hit(pid, key, scale_ms, now) do
-    count_hit(pid, key, scale_ms, now, 1)
+  def count_hit(pid, key, scale_ms) do
+    count_hit(pid, key, scale_ms, 1)
   end
 
   @doc """
@@ -85,12 +84,13 @@ defmodule Hammer.Backend.ETS do
           pid :: pid(),
           key :: bucket_key,
           scale_ms :: integer,
-          now :: integer,
           increment :: integer
         ) ::
-          {:ok, count :: integer}
+          {:ok, count :: integer, created :: integer}
           | {:error, reason :: any}
-  def count_hit(pid, key, scale_ms, now, increment) do
+  def count_hit(pid, key, scale_ms, increment) do
+    now = Utils.timestamp()
+
     if :ets.member(@ets_table_name, key) do
       [count, _] =
         :ets.update_counter(@ets_table_name, key, [
@@ -100,12 +100,14 @@ defmodule Hammer.Backend.ETS do
           {4, 1, 0, now}
         ])
 
-      {:ok, count}
+      [{_key, _count, created, _updated}] = :ets.lookup(@ets_table_name, key)
+
+      {:ok, count, created}
     else
       # Insert {key, count, created_at, updated_at}
       true = :ets.insert(@ets_table_name, {key, increment, now, now})
       Process.send_after(pid, {:delete_bucket, key}, scale_ms)
-      {:ok, increment}
+      {:ok, increment, now}
     end
   rescue
     e ->

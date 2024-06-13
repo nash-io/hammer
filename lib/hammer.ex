@@ -10,7 +10,7 @@ defmodule Hammer do
 
   @spec check_rate(id :: String.t(), scale_ms :: integer, limit :: integer) ::
           {:allow, count :: integer}
-          | {:deny, limit :: integer}
+          | {:deny, count :: integer, ms_to_next_bucket :: integer, created :: integer}
           | {:error, reason :: any}
   @doc """
   Check if the action you wish to perform is within the bounds of the rate-limit.
@@ -22,7 +22,7 @@ defmodule Hammer do
   - `scale_ms`: Integer indicating size of bucket in milliseconds
   - `limit`: Integer maximum count of actions within the bucket
 
-  Returns either `{:allow,  count}`, `{:deny,   limit}` or `{:error,  reason}`
+  Returns either `{:allow,  count}`, `{:deny, count, ms_to_next_bucket, created}` or `{:error,  reason}`
 
   Example:
 
@@ -30,7 +30,7 @@ defmodule Hammer do
       case check_rate("file_upload:\#{user_id}", 60_000, 5) do
         {:allow, _count} ->
           # do the file upload
-        {:deny, _limit} ->
+        {:deny, _count, _ms_to_next_bucket, _created} ->
           # render an error page or something
       end
   """
@@ -40,18 +40,19 @@ defmodule Hammer do
 
   @spec check_rate(backend :: atom, id :: String.t(), scale_ms :: integer, limit :: integer) ::
           {:allow, count :: integer}
-          | {:deny, limit :: integer}
+          | {:deny, count :: integer, ms_to_next_bucket :: integer, created :: integer}
           | {:error, reason :: any}
   @doc """
   Same as `check_rate/3`, but allows specifying a backend.
   """
   def check_rate(backend, id, scale_ms, limit) do
-    {stamp, key} = Utils.stamp_key(id, scale_ms)
+    key = Utils.build_key(id, scale_ms)
 
-    case call_backend(backend, :count_hit, [key, scale_ms, stamp]) do
-      {:ok, count} ->
+    case call_backend(backend, :count_hit, [key, scale_ms]) do
+      {:ok, count, created_at} ->
         if count > limit do
-          {:deny, limit}
+          ms_to_next_bucket = get_ms_to_next_bucket(created_at, scale_ms)
+          {:deny, count, ms_to_next_bucket, created_at}
         else
           {:allow, count}
         end
@@ -68,7 +69,7 @@ defmodule Hammer do
           increment :: integer
         ) ::
           {:allow, count :: integer}
-          | {:deny, limit :: integer}
+          | {:deny, count :: integer, ms_to_next_bucket :: integer, created :: integer}
           | {:error, reason :: any}
   @doc """
   Same as check_rate/3, but allows the increment number to be specified.
@@ -87,18 +88,19 @@ defmodule Hammer do
           increment :: integer
         ) ::
           {:allow, count :: integer}
-          | {:deny, limit :: integer}
+          | {:deny, count :: integer, ms_to_next_bucket :: integer, created :: integer}
           | {:error, reason :: any}
   @doc """
   Same as check_rate_inc/4, but allows specifying a backend.
   """
   def check_rate_inc(backend, id, scale_ms, limit, increment) do
-    {stamp, key} = Utils.stamp_key(id, scale_ms)
+    key = Utils.build_key(id, scale_ms)
 
-    case call_backend(backend, :count_hit, [key, scale_ms, stamp, increment]) do
-      {:ok, count} ->
+    case call_backend(backend, :count_hit, [key, scale_ms, increment]) do
+      {:ok, count, created_at} ->
         if count > limit do
-          {:deny, limit}
+          ms_to_next_bucket = get_ms_to_next_bucket(created_at, scale_ms)
+          {:deny, count, ms_to_next_bucket, created_at}
         else
           {:allow, count}
         end
@@ -150,16 +152,14 @@ defmodule Hammer do
   Same as inspect_bucket/3, but allows specifying a backend
   """
   def inspect_bucket(backend, id, scale_ms, limit) do
-    {_stamp, key} = Utils.stamp_key(id, scale_ms)
+    key = Utils.build_key(id, scale_ms)
 
     case call_backend(backend, :get_bucket, [key]) do
       {:ok, nil} ->
         {:ok, {0, limit, scale_ms, nil, nil}}
 
       {:ok, {_, count, created_at, updated_at}} ->
-        now = Utils.timestamp()
-        time_passed = now - created_at
-        ms_to_next_bucket = max(scale_ms - time_passed, 0)
+        ms_to_next_bucket = get_ms_to_next_bucket(created_at, scale_ms)
         count_remaining = if limit > count, do: limit - count, else: 0
 
         {:ok, {count, count_remaining, ms_to_next_bucket, created_at, updated_at}}
@@ -167,6 +167,13 @@ defmodule Hammer do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  @spec get_ms_to_next_bucket(non_neg_integer(), non_neg_integer()) :: non_neg_integer()
+  defp get_ms_to_next_bucket(created_at, scale_ms) do
+    now = Utils.timestamp()
+    time_passed = now - created_at
+    max(scale_ms - time_passed, 0)
   end
 
   @spec delete_buckets(id :: String.t()) ::
@@ -206,7 +213,7 @@ defmodule Hammer do
   @spec make_rate_checker(id_prefix :: String.t(), scale_ms :: integer, limit :: integer) ::
           (id :: String.t() ->
              {:allow, count :: integer}
-             | {:deny, limit :: integer}
+             | {:deny, count :: integer, ms_to_next_bucket :: integer, created :: integer}
              | {:error, reason :: any})
   @doc """
   Make a rate-checker function, with the given `id` prefix, scale_ms and limit.
@@ -228,7 +235,7 @@ defmodule Hammer do
       case chat_rate_limiter.(user_id) do
         {:allow, _count} ->
           # allow chat message
-        {:deny, _limit} ->
+        {:deny, _count, _ms_to_next_bucket, _created} ->
           # deny
       end
   """
@@ -244,7 +251,7 @@ defmodule Hammer do
         ) ::
           (id :: String.t() ->
              {:allow, count :: integer}
-             | {:deny, limit :: integer}
+             | {:deny, count :: integer, ms_to_next_bucket :: integer, created :: integer}
              | {:error, reason :: any})
   @doc """
   """
